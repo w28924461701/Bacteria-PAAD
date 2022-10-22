@@ -1,0 +1,76 @@
+#引用包
+library(limma)
+library(ggplot2)
+library(ggpubr)
+
+expFile="symbol.PAAD.txt"     #表达数据文件
+setwd("D:\\PAAD")      #设置工作目录
+
+#读取基因表达文件,并对数据进行处理
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)), nrow=nrow(exp), dimnames=dimnames)
+data=avereps(data)
+data=data[rowMeans(data)>0,]
+#获取正常样品和肿瘤样品的数目
+group=sapply(strsplit(colnames(data),"\\-"), "[", 4)
+group=sapply(strsplit(group,""), "[", 1)
+group=gsub("2", "1", group)
+dataT=data[,group==0]
+dataN=data[,group==1]
+data<-cbind(dataN,dataT)
+
+conNum=length(group[group==1])       #正常组样品数目
+treatNum=length(group[group==0])     #肿瘤组样品数目
+Type=c(rep(1,conNum), rep(2,treatNum))
+
+
+outTab=data.frame()
+for(i in row.names(data)){
+  rt=data.frame(expression=data[i,], Type=Type)
+  wilcoxTest=wilcox.test(expression ~ Type, data=rt)
+  pvalue=wilcoxTest$p.value
+  conGeneMeans=mean(data[i,1:conNum])
+  treatGeneMeans=mean(data[i,(conNum+1):ncol(data)])
+  logFC=log2(treatGeneMeans)-log2(conGeneMeans)
+  conMed=median(data[i,1:conNum])
+  treatMed=median(data[i,(conNum+1):ncol(data)])
+  diffMed=treatMed-conMed
+  if( ((logFC>0) & (diffMed>0)) | ((logFC<0) & (diffMed<0)) ){  
+    outTab=rbind(outTab,cbind(gene=i,lowMean=conGeneMeans,highMean=treatGeneMeans,logFC=logFC,pValue=pvalue))
+  }
+}
+pValue=outTab[,"pValue"]
+fdr=p.adjust(as.numeric(as.vector(pValue)), method="fdr")
+outTab=cbind(outTab, fdr=fdr)
+outTab$logPvalue<- -log10(outTab$pValue)
+
+for (i in c(2:6)){
+  outTab[,i] <- as.numeric( outTab[,i])
+}
+
+library(ggpubr)
+library(ggthemes)
+
+outTab$Group='not-signifcant'
+outTab$Group[which((outTab$pValue<0.05)&(outTab$logFC>2))]='up-regulated'
+outTab$Group[which((outTab$pValue<0.05)&(outTab$logFC< -2))]='down-regulated'
+
+outTab$label=''
+outTab<-outTab[order(outTab$pValue),]
+up.genes<-head(outTab$gene[which(outTab$Group=='up-regulated')],10)
+down.genes<-head(outTab$gene[which(outTab$Group=='down-regulated')],10)
+
+deg.top10.genes <-c(as.character(up.genes),as.character(down.genes))
+
+outTab$label[match(deg.top10.genes,outTab$gene)]<-deg.top10.genes
+
+ggscatter(outTab,x = 'logFC', y = 'logPvalue',color ='Group',
+    palette = c('green','gray','red'),size = 1,label =outTab$label,font.label = 8,
+    repel = T
+    )+theme_base()+
+  geom_hline(yintercept = 1.30,linetype='dashed')+
+  geom_vline(xintercept =c(-2,2),linetype='dashed')
